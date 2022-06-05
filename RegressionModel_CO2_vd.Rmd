@@ -1,0 +1,408 @@
+---
+title: "Model_CO2"
+author: "Mariona Domingo Gómez"
+date: "5/12/2022"
+output:
+  html_document:
+    highlight: default
+    number_sections: no
+    theme: cosmo
+    toc: yes
+    toc_depth: 2
+    includes:
+      in_header:
+  pdf_document:
+    highlight: zenburn
+    toc: yes
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Carreguem llibreries necessàries
+library(plm)
+library(dplyr)
+library(ggplot2)
+library(gplots)
+library(corrplot)
+library(arules)
+library(stargazer)
+library(nortest)
+library(lmtest)
+library(tidyverse)
+library(gapminder)
+library(psych)
+library(reshape)
+library(car)
+library(GGally)
+library(plyr)
+library(relaimpo)
+library(performance)
+```
+
+# 1. Carreguem dades
+
+```{r}
+data <- read.csv("/Users/mariona/Desktop/TFM/BBDD/bdd_world_year_vdef.csv", sep=",",)
+str(data)
+```
+
+```{r}
+# Observem primeres files del dataset
+head(data)
+```
+
+# 2. Exploració de les dades
+
+## Anàlisi descriptiu i visual de les dades
+
+Els següents passos seran comprovar que no hi hagi valors nuls (en la creació de la bdd ja s'ha fet una examinació més detallada), es canviarà el nom d'algunes columnes per treballar amb més comoditat i visualitzarem les estadístiques descriptives bàsiques de les dades.
+
+```{r, echo=FALSE}
+# Comprovem nombre de valors nuls
+sapply(data, function(x) sum(is.na(x)))
+```
+
+```{r}
+# Renombrem columnes
+data <- data %>% 
+  dplyr::rename(
+    year = Year,
+    gdp = GDP_capita,
+    fssl = fossil_energy_per_capita,
+    rnw = renewables_energy_per_capita,
+    pop = Population
+    )
+```
+
+```{r}
+# Estadístiques descriptives
+psych::describe(data)
+```
+
+```{r}
+for(column in colnames(data)){
+  print(column)
+  print(sd(data[,c(column)]))
+}
+```
+
+```{r}
+summary(data)
+```
+
+A continuació veurem les gràfiques on relacionen cada variable amb els anys, per veure quina tendència han seguit des de 1966 fins a 2020.
+
+```{r waning=FALSE, message=FALSE}
+# Visualitzem les variables a través dels anys
+for(i in 2:ncol(data)) {
+  print(ggplot(data, aes(x = year, y = data[ , i])) +
+          ylab(colnames(data[i])) +
+          geom_point() +
+          stat_smooth())
+}
+```
+
+A continuació, com que l'objectiu del nostre primer model serà predir les emissions de CO2, visualitzarem la relació de les variables amb el CO2 per veure el seu comportament.
+
+```{r waning=FALSE, message=FALSE}
+# Relació variables vs. Co2
+for(i in 3:ncol(data)) {
+  print(ggplot(data, aes(x = co2, y = data[ , i])) +
+          ylab(colnames(data[i])) +
+          geom_point() +
+          stat_smooth())
+}
+```
+
+## Distribució de les variables
+
+A través d'histogrames veurem com es distribueixen les variables:
+
+```{r warning=FALSE, message=FALSE}
+#Histogrames
+par(mfrow=c(3,3))
+hist(data$co2, main="Emisions de CO2", col="lightblue")
+hist(data$gdp, main="PIB per càpita", col="lightblue")
+hist(data$pop, main="Nº d'habitants", col="lightblue")
+hist(data$ru_pop, main="% of de població rural", col="lightblue")
+hist(data$rnw, main="Consum de renovables per càpita", col="lightblue")
+hist(data$fssl, main="Consum de combustibles fòssils per càpita", col="lightblue")
+hist(data$sh_aland, main="Proporció de terres agrícoles", col="lightblue")
+hist(data$crop_res, main="Residus de cultiu", col="lightblue")
+```
+
+Com podem veure visualment les variables no semblen tenir una distribució normal. Per això i també per facilitar la interpretació dels coeficients de les variables explicatives com a elasticitats (l'augment percentual de les emissions corresponent a un 1% d'augment de la variable explicativa), transformarem les variables en logaritmes, excepte aquelles que corresponen a percentatges.
+
+```{r}
+library(caret)
+preproc1 <- preProcess((data), method=c("center", "scale"))
+norm1 <- predict(preproc1, data)
+summary(norm1)
+```
+
+
+```{r}
+# Creem variables logarítmiques
+data$lco2 <- log(data$co2)
+data$lgdp <- log(data$gdp)
+data$lpop <- log(data$pop)
+data$lfssl <- log(data$fssl)
+data$lengy <- log(data$engy)
+data$lrnw <- log(data$rnw)
+data$lwood_fuel <- log(data$wood_fuel)
+data$lgni <- log(data$gni)
+data$llife_ex <- log(data$life_ex)
+data$lagr_prodx <- log(data$agr_prodx)
+data$lcrop_res <- log(data$crop_res)
+data$llivestock <- log(data$livestock)
+```
+
+## Punts extrems
+
+Ara comprovarem la presència de *outliers* per a cada variable del joc de dades, mitjançant diagrames de caixa (*boxplots*).
+
+```{r}
+meltData <- melt(data)
+p <- ggplot(meltData, aes(factor(variable), value))
+p + geom_boxplot() + facet_wrap(~variable, scale="free")
+```
+
+# 3. Model de regressió linear
+
+```{r}
+fullModel <- lm(co2~gdp+pop+ru_pop+rnw+fssl+crop_res+sh_aland, data=norm1)
+summary(fullModel)
+```
+
+```{r}
+fullModel$coefficients
+```
+
+
+```{r}
+backward <- step(fullModel, direction='backward', scope=formula(fullModel), trace=0)
+backward$coefficients
+```
+
+```{r}
+backward$anova
+```
+
+Ara entrenem el model amb les variables obtingudes:
+
+```{r}
+ols <- lm(co2 ~ gdp+pop+ru_pop+rnw+fssl, data=norm1)
+summary(ols)
+```
+
+```{r message=FALSE, warning=FALSE}
+stargazer(ols, type='text')
+```
+
+# 4. Comprovació de supòsits de regressió lineal
+
+## 1. Distribució normal dels errors
+
+```{r}
+# Visualitzem distribució dels residus del model
+hist(ols$residuals)
+```
+
+L'histograma d'errors anterior indica que els errors es distribueixen normalment.
+
+```{r}
+# Mostrem gràfic Q-Q
+plot(ols, which=2)
+```
+
+Com podem observar al gràfic anterior, els punts s'ajusten bastant a la línia, sobretot abans del quantil 1. Després d'aquest els punts es distancien una mica.
+
+Conclusió: Els dos gràfics ens indiquen que es cumpleix la primera regla, i la distribució dels residus es normal.
+
+## 2. Homoscedasticitat
+
+Això vol dir que la variància dels termes d'error hauria de ser constant. No veurem cap patró quan dibuixem una gràfica entre residus i valors ajustats, i la línia mitjana hauria d'estar prop de zero.
+
+```{r}
+# Visualitzem variància dels termes d'error
+plot(ols, which=1)
+```
+
+La línia vermella recta al valor zero ens indica que no tenim cap problema d'heteroscedasticitat a les nostres dades.
+
+També comprovarem la homoscedasticitat amb el test de Breusch-Pagan on la hipòtesi nul·la indica que hi ha homoscedasticitat a les dades.
+
+```{r}
+bptest(ols, data=data, studentize=F)
+```
+
+El *p-value* és superior a 0,05, la qual cosa ens permet acceptar la hipòtesi nul·la i confirma que no existeix heteroscedasticitat en aquest conjunt de dades.
+
+Conclusió: Es compleix la segona regla, indicant que no existeix heteroscedasticitat.
+
+## 3. No correlació en sèrie automàtica
+
+L'autocorrelació significa que els termes d'error no s'han de correlacionar entre si. Per comprovar-ho, executarem la prova Durbin-Watson (prova dw). La prova retorna un valor entre 0 i 4, si el valor és 2, diem que no hi ha correlació en sèrie automàtica. Tanmateix, un valor superior a 2 representa una correlació (-) ve i un valor inferior a 2 representa una correlació (+).
+
+```{r}
+dwtest(ols)
+```
+
+Com que obtenim que DW = 1.6 assumim que no hi ha una mica de correlació en sèrie automàtica positiva, però el valor s'acosta bastant al 2, per tant, no calen més tractaments.
+
+Per altra banda, també podem il·lustrar com es distribueixen els residus al llarg del rang de variables predictores mitjançant una gràfica. Un model ideal produiria una gràfica amb una dispersió aleatòria de residus, indicada per una línia vermella recta i horitzontal.
+
+```{r}
+plot(ols, which=3)
+```
+
+Veiem que els residuts es troben dispersos aleatòriament, resultant en una línia vermella horitzontal bastant recta.
+
+## 4. Valors extrems
+
+El diagrama de *Cook* s'utilitza per determinar la influència dels valors extrems produïts pel model. Si fora dels límits de la "distància de Cook" (més enllà de les línies hiperbòliques de punts vermells a les parts superior i inferior dreta de la trama), un punt es considera que influeix en els resultats de la regressió i, per tant, excloure'l alteraria aquests resultats.
+
+```{r}
+plot(ols, which=5)
+```
+
+```{r}
+plot(ols, which=4)
+```
+
+Les gràfiques anteriors mostren un punt extrem del model, l'observació número 55.  Aquesta observació correspon a l'any 2020. Com ja sabem, aquest any ha estat particular a causa del COVID-19 i per això pot ser que esbiaixi els resultats.
+
+## 5. No multicolinealitat
+
+El model lineal suposa que les variables predictores no es correlacionen entre si. En el nostre cas i segons els anàlisis fets fins ara, és molt possible que aquesta propietat no es compleixi. Amb la prova del factor d'inflació de variació comprovarem la hipòtesi de multicolinealitat.
+
+```{r}
+sort(vif(ols))
+```
+
+Observem que els factor d'inflació de la variància són molt alts, indicant la presència de multicolinealitat en les dades.
+
+Treiem les variables amb VIF més elevats i entrenem el model amb les variables restants.
+
+```{r}
+olsFinal <- lm(co2 ~ gdp+pop+rnw+fssl, data=norm1)
+summary(olsFinal)
+```
+
+```{r}
+ggplot(data, aes(x=predict(olsFinal), y= lco2)) +
+  geom_point() +
+  geom_abline(intercept=0, slope=1, col='blue') +
+  labs(x='Valors Predits', y='Valors Actuals')
+```
+
+# 5. Prediccions Escenaris
+
+## 5.1. Escenari BAU
+
+```{r}
+data[c('year','ru_pop')]
+```
+
+```{r}
+prev_gdp <- data[c('year', 'gdp')] %>%
+  mutate(pct_change = (gdp - lag(gdp))/lag(gdp) * 100)
+prev_gdp
+```
+
+```{r}
+mean(prev_gdp[50:54,c('pct_change')])
+```
+
+```{r}
+prev_rnw <- data[c('year', 'rnw')] %>%
+  mutate(pct_change = (rnw - lag(rnw))/lag(rnw) * 100)
+prev_rnw
+```
+
+```{r}
+mean(prev_rnw[51:55,c('pct_change')])
+```
+
+```{r}
+prev_ru_pop <- data[c('year', 'ru_pop')] %>%
+  mutate(pct_change = (ru_pop - lag(ru_pop))/lag(ru_pop) * 100)
+prev_age_dep
+```
+
+```{r}
+mean(prev_ru_pop[51:55,c('pct_change')])
+```
+
+```{r}
+dataPred <- data[c('year','gdp','ru_pop','rnw')]
+```
+
+```{r}
+dataPred <- read_excel("/Users/mariona/Desktop/TFM/BBDD/bdd_world_year_pred.xlsx")
+str(dataPred)
+```
+
+```{r}
+dataPred$lgdp <- log(dataPred$gdp)
+dataPred$lrnw <- log(dataPred$rnw)
+dataPred$lco2 <- log(dataPred$co2)
+```
+
+```{r}
+predictions <- predict(olsFinal, newdata=dataPred)
+exp(predictions)
+```
+
+```{r}
+plot(predictions)
+```
+
+```{r}
+co2_pred <- exp(predictions[57:67])
+co2_pred
+```
+
+## 5.2. Escenari baixes emissions
+
+```{r}
+dataPred2 <- read_excel("/Users/mariona/Desktop/TFM/BBDD/bdd_world_year_pred2.xlsx")
+str(dataPred2)
+```
+
+```{r}
+dataPred2$lgdp <- log(dataPred2$gdp)
+dataPred2$lrnw <- log(dataPred2$rnw)
+dataPred2$lco2 <- log(dataPred2$co2)
+```
+
+
+```{r}
+predictions2 <- predict(olsFinal, newdata=dataPred2)
+exp(predictions2)
+```
+
+
+```{r}
+plot(predictions2)
+```
+
+```{r}
+co2_pred2 <- exp(predictions2[57:67])
+co2_pred2
+```
+
+```{r}
+plot(ts(exp(predictions), start = 1966, freq = 1), ylab="CO2 (ppm)", xlab="Any")
+```
+
+
+
+
+
+
+
