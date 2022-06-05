@@ -1,0 +1,222 @@
+---
+title: "Predicció de temperatura amb ARIMA"
+author: "Mariona Domingo Gómez"
+date: "5/12/2022"
+output:
+  html_document:
+    highlight: default
+    number_sections: no
+    theme: cosmo
+    toc: yes
+    toc_depth: 2
+    includes:
+      in_header:
+  pdf_document:
+    highlight: zenburn
+    toc: yes
+  word_document: default
+---
+
+# 1. Carreguem dades i llibreries
+
+```{r message=FALSE, warning=FALSE}
+library(forecast)
+library(fpp)
+library(xts)
+library(vars)
+library(Metrics)
+library(astsa)
+library(mFilter)
+```
+
+```{r}
+df <- read.csv("/Users/mariona/Desktop/TFM/BBDD/bdd_temp_year.csv", sep=",",)
+str(df)
+```
+
+Utilitzarem dues de les variables:
+
+- `temp`: Les temperatures es donen en graus centígrads i es presenten com a anomalies en relació amb la mitjana del període de gener de 1951 a desembre de 1980.
+- `co2`: Emissions de CO2 en ppm.
+
+# 2. Transformació i exploració de dades
+
+## 2.1. Transformació dades
+
+Convertim les variables en format time series:
+
+```{r}
+# TS de temperatura
+tsTemp <- ts(df[,2], start = 1959, freq = 1)
+tsTemp
+```
+
+```{r}
+# TS de co2
+tsCo2 <- ts(df[,3], start = 1959, freq = 1)
+tsCo2
+```
+
+## 2.2. Anàlisi Exploratori de Temperatura
+
+```{r}
+plot(tsTemp, xlab="Any", ylab="Temperatura")
+```
+
+```{r}
+plot(tsCo2, main="Evolucó CO2 anual")
+```
+
+Podem deduir dels gràfics anteriors que els punts de dades segueixen una tendència general a l'alça. Sembla que no hi ha cap valor atípic ni observació inusual al conjunt de dades.
+
+### Estacionarietat
+
+Abans d'aplicar la nostra previsió, ens hem d'assegurar que la sèrie temporal és estacionària. ACF i PACF assumeixen l'estacionarietat de la sèrie temporal subjacent. L'estacionarietat es pot comprovar mitjançant la realització d'una prova Augmented Dickey-Fuller (ADF):
+
+- p-valor > 0,05: no es rebutja la hipòtesi nul·la (H0), les dades tenen una arrel unitària i no són estacionàries.
+- p-valor <= 0,05: rebutja la hipòtesi nul·la (H0), les dades no tenen arrel unitària i són estacionàries.
+
+```{r}
+# ADF test per la temperatura
+adf.test(tsTemp, alternative ="stationary") 
+```
+
+Mitjançant la prova d'hipòtesis, podem veure que l'ADF dóna un valor p inferior a un nivell de significació del 5%. Així, podem rebutjar la hipòtesi nul·la i acceptar la hipòtesi alternativa. Rebutjar la hipòtesi nul·la significa que el procés no té arrel unitària i, al seu torn, que la sèrie temporal és estacionària o no té una estructura dependent del temps.
+
+```{r}
+kpss.test(tsTemp, null="Level")
+```
+
+```{r}
+kpss.test(tsTemp, null="Trend")
+```
+
+Els resultats de l'ADF per al CO2 són el contrari que els de la temperatura. Obtenim un valor p superior a 0,05. Hem d'acceptar la hipòtesi nul·la implicant que les dades no són estacionaries.
+
+```{r}
+ndiffs(tsTemp)
+```
+
+```{r}
+tsTempDif = diff(tsTemp, differences = 1)
+plot.ts(tsTempDif)
+```
+
+```{r}
+tsdisplay(tsTemp)
+```
+
+```{r}
+tsdisplay(tsTempDif)
+```
+
+```{r}
+tsTempDif
+```
+
+```{r}
+tsCo2[2:63]
+```
+
+# 5. Model ARIMA
+
+## 5.1. Utilitzant el CO2 com a regressor extern
+
+```{r}
+# Model arima amb co2
+modelTemp = auto.arima(tsTemp, xreg=tsCo2)
+modelTemp
+```
+
+```{r}
+fitted = fitted(modelTemp)
+#predicted/fitted values for nominal
+mae(tsTemp, fitted) #residual MAPE for ARMA errors
+```
+
+```{r}
+summary(modelTemp)
+```
+
+```{r}
+summary(best_model)
+```
+
+
+```{r}
+best_model = Arima(tsTemp, model=modelTemp, xreg =tsCo2)
+sarima(tsTemp, xreg=tsCo2, 0,0,1)
+```
+
+```{r}
+Box.test(best_model$resid, lag = 24, type = c("Ljung-Box"), fitdf = 8)$p.value
+```
+
+# 6. Prediccions BAU
+
+```{r}
+# Pujar dades de diferents escenaris de CO2
+ tsCo2_pred <- ts(co2_pred, start = 2022, freq = 1)
+tsCo2_pred
+```
+
+```{r}
+forecastBAU <- sarima.for(tsTemp, xreg=tsCo2, p=0, d=0, q=1, newxreg=tsCo2_pred, n.ahead=11, plot=T)
+```
+
+```{r}
+forecastBAU
+```
+
+
+# 6. Prediccions Baixes Emissions
+
+```{r}
+# Pujar dades de diferents escenaris de CO2
+tsCo2_pred2 <- ts(co2_pred2, start = 2022, freq = 1)
+tsCo2_pred2
+```
+
+```{r}
+plot(tsCo2_pred2)
+```
+
+
+```{r}
+forecastER <- sarima.for(tsTemp, xreg=tsCo2, p=0, d=0, q=1, newxreg=tsCo2_pred2, n.ahead=11, plot=T)
+```
+
+```{r}
+forecastER$pred
+```
+
+```{r}
+# plot the first curve by calling plot() function
+# First curve is plotted
+plot(xdata, y1, type="o", col="blue", pch="o", lty=1, ylim=c(0,110), ylab="y" )
+
+# Add second curve to the same plot by calling points() and lines()
+# Use symbol '*' for points.
+points(xdata, y2, col="red", pch="*")
+lines(xdata, y2, col="red",lty=2)
+
+# Add Third curve to the same plot by calling points() and lines()
+# Use symbol '+' for points.
+points(xdata, y3, col="dark red",pch="+")
+lines(xdata, y3, col="dark red", lty=3)
+
+# Adding a legend inside box at the location (2,40) in graph coordinates.
+# Note that the order of plots are maintained in the vectors of attributes.
+legend(1,100,legend=c("y1","y2","y3"), col=c("blue","red","black"),
+                                   pch=c("o","*","+"),lty=c(1,2,3), ncol=1)
+```
+
+
+```{r}
+plot(forecastBAU$pred, type="l", col="red", xlab="Any", ylab="Temperatura")
+# Adds the second curve to the same plot
+lines(forecastER$pred, type="l", col="blue", lty=2)
+legend("topleft",legend=c("BAU","ER"), col=c("red","blue"), lty=1:2, cex=0.8)
+```
+
+
